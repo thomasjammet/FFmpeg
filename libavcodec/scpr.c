@@ -372,7 +372,7 @@ static int decompress_p(AVCodecContext *avctx,
 {
     SCPRContext *s = avctx->priv_data;
     GetByteContext *gb = &s->gb;
-    int ret, temp, min, max, x, y, cx = 0, cx1 = 0;
+    int ret, temp = 0, min, max, x, y, cx = 0, cx1 = 0;
     int backstep = linesize - avctx->width;
 
     if (bytestream2_get_byte(gb) == 0)
@@ -382,8 +382,11 @@ static int decompress_p(AVCodecContext *avctx,
 
     ret  = decode_value(s, s->range_model, 256, 1, &min);
     ret |= decode_value(s, s->range_model, 256, 1, &temp);
+    if (ret < 0)
+        return ret;
+
     min += temp << 8;
-    ret |= decode_value(s, s->range_model, 256, 1, &max);
+    ret  = decode_value(s, s->range_model, 256, 1, &max);
     ret |= decode_value(s, s->range_model, 256, 1, &temp);
     if (ret < 0)
         return ret;
@@ -408,6 +411,10 @@ static int decompress_p(AVCodecContext *avctx,
             s->blocks[min++] = fill;
         }
     }
+
+    ret = av_frame_copy(s->current_frame, s->last_frame);
+    if (ret < 0)
+        return ret;
 
     for (y = 0; y < s->nby; y++) {
         for (x = 0; x < s->nbx; x++) {
@@ -548,10 +555,6 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
         }
     } else if (type == 0 || type == 1) {
         frame->key_frame = 0;
-
-        ret = av_frame_copy(s->current_frame, s->last_frame);
-        if (ret < 0)
-            return ret;
 
         if (s->version == 1 || s->version == 2)
             ret = decompress_p(avctx, (uint32_t *)s->current_frame->data[0],

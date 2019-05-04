@@ -600,7 +600,8 @@ static inline void tm2_null_res_block(TM2Context *ctx, AVFrame *pic, int bx, int
 {
     int i;
     int ct;
-    int left, right, diff;
+    unsigned left, right;
+    int diff;
     int deltas[16];
     TM2_INIT_POINTERS();
 
@@ -686,8 +687,8 @@ static inline void tm2_update_block(TM2Context *ctx, AVFrame *pic, int bx, int b
     /* update chroma */
     for (j = 0; j < 2; j++) {
         for (i = 0; i < 2; i++) {
-            U[i] = Uo[i] + GET_TOK(ctx, TM2_UPD);
-            V[i] = Vo[i] + GET_TOK(ctx, TM2_UPD);
+            U[i] = Uo[i] + (unsigned)GET_TOK(ctx, TM2_UPD);
+            V[i] = Vo[i] + (unsigned)GET_TOK(ctx, TM2_UPD);
         }
         U  += Ustride;
         V  += Vstride;
@@ -836,7 +837,7 @@ static int tm2_decode_blocks(TM2Context *ctx, AVFrame *p)
     dst = p->data[0];
     for (j = 0; j < h; j++) {
         for (i = 0; i < w; i++) {
-            int y = Y[i], u = U[i >> 1], v = V[i >> 1];
+            unsigned y = Y[i], u = U[i >> 1], v = V[i >> 1];
             dst[3*i+0] = av_clip_uint8(y + v);
             dst[3*i+1] = av_clip_uint8(y);
             dst[3*i+2] = av_clip_uint8(y + u);

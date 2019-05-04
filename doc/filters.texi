@@ -390,6 +390,10 @@ The filter accepts the following options:
 @item level_in
 Set input gain. Default is 1. Range is between 0.015625 and 64.
 
+@item mode
+Set mode of compressor operation. Can be @code{upward} or @code{downward}.
+Default is @code{downward}.
+
 @item threshold
 If a signal of stream rises above this level it will affect the gain
 reduction.
@@ -1304,9 +1308,16 @@ Shorter signals than the chosen attack time will be left untouched.
 Set input level before filtering.
 Default is 1. Allowed range is from 0.015625 to 64.
 
+@item mode
+Set the mode of operation. Can be @code{upward} or @code{downward}.
+Default is @code{downward}. If set to @code{upward} mode, higher parts of signal
+will be amplified, expanding dynamic range in upward direction.
+Otherwise, in case of @code{downward} lower parts of signal will be reduced.
+
 @item range
 Set the level of gain reduction when the signal is below the threshold.
 Default is 0.06125. Allowed range is from 0 to 1.
+Setting this to 0 disables reduction and then filter behaves like expander.
 
 @item threshold
 If a signal rises above this level the gain reduction is released.
@@ -1773,6 +1784,23 @@ Default value is 2 milliseconds.
 @item r
 Set research radius duration. Allowed range is from 2 to 300 milliseconds.
 Default value is 6 milliseconds.
+
+@item o
+Set the output mode.
+
+It accepts the following values:
+@table @option
+@item i
+Pass input unchanged.
+
+@item o
+Pass noise filtered out.
+
+@item n
+Pass only noise.
+
+Default value is @var{o}.
+@end table
 @end table
 
 @section anull
@@ -2076,6 +2104,33 @@ audio, the data is treated as if all the planes were concatenated.
 A list of Adler-32 checksums for each data plane.
 @end table
 
+@section asoftclip
+Apply audio soft clipping.
+
+Soft clipping is a type of distortion effect where the amplitude of a signal is saturated
+along a smooth curve, rather than the abrupt shape of hard-clipping.
+
+This filter accepts the following options:
+
+@table @option
+@item type
+Set type of soft-clipping.
+
+It accepts the following values:
+@table @option
+@item tanh
+@item atan
+@item cubic
+@item exp
+@item alg
+@item quintic
+@item sin
+@end table
+
+@item param
+Set additional parameter which controls sigmoid function.
+@end table
+
 @anchor{astats}
 @section astats
 
@@ -2113,6 +2168,9 @@ Bit_depth
 Dynamic_range
 Zero_crossings
 Zero_crossings_rate
+Number_of_NaNs
+Number_of_Infs
+Number_of_denormals
 
 and for Overall:
 DC_offset
@@ -2130,6 +2188,9 @@ Flat_factor
 Peak_count
 Bit_depth
 Number_of_samples
+Number_of_NaNs
+Number_of_Infs
+Number_of_denormals
 
 For example full key look like this @code{lavfi.astats.1.DC_offset} or
 this @code{lavfi.astats.Overall.Peak_count}.
@@ -2139,6 +2200,17 @@ For description what each key means read below.
 @item reset
 Set number of frame after which stats are going to be recalculated.
 Default is disabled.
+
+@item measure_perchannel
+Select the entries which need to be measured per channel. The metadata keys can
+be used as flags, default is @option{all} which measures everything.
+@option{none} disables all per channel measurement.
+
+@item measure_overall
+Select the entries which need to be measured overall. The metadata keys can
+be used as flags, default is @option{all} which measures everything.
+@option{none} disables all overall measurement.
+
 @end table
 
 A description of each shown parameter follows:
@@ -4219,6 +4291,10 @@ The filter accepts the following options:
 @item level_in
 Set input gain. Default is 1. Range is between 0.015625 and 64.
 
+@item mode
+Set mode of compressor operation. Can be @code{upward} or @code{downward}.
+Default is @code{downward}.
+
 @item threshold
 If a signal of second stream raises above this level it will affect the gain
 reduction of first stream.
@@ -4295,9 +4371,16 @@ The filter accepts the following options:
 Set input level before filtering.
 Default is 1. Allowed range is from 0.015625 to 64.
 
+@item mode
+Set the mode of operation. Can be @code{upward} or @code{downward}.
+Default is @code{downward}. If set to @code{upward} mode, higher parts of signal
+will be amplified, expanding dynamic range in upward direction.
+Otherwise, in case of @code{downward} lower parts of signal will be reduced.
+
 @item range
 Set the level of gain reduction when the signal is below the threshold.
 Default is 0.06125. Allowed range is from 0 to 1.
+Setting this to 0 disables reduction and then filter behaves like expander.
 
 @item threshold
 If a signal rises above this level the gain reduction is released.
@@ -4821,17 +4904,116 @@ Set LFE low cut off frequency. By default, this is @var{128} Hz.
 @item lfe_high
 Set LFE high cut off frequency. By default, this is @var{256} Hz.
 
+@item lfe_mode
+Set LFE mode, can be @var{add} or @var{sub}. Default is @var{add}.
+In @var{add} mode, LFE channel is created from input audio and added to output.
+In @var{sub} mode, LFE channel is created from input audio and added to output but
+also all non-LFE output channels are subtracted with output LFE channel.
+
+@item angle
+Set angle of stereo surround transform, Allowed range is from @var{0} to @var{360}.
+Default is @var{90}.
+
 @item fc_in
 Set front center input volume. By default, this is @var{1}.
 
 @item fc_out
 Set front center output volume. By default, this is @var{1}.
 
+@item fl_in
+Set front left input volume. By default, this is @var{1}.
+
+@item fl_out
+Set front left output volume. By default, this is @var{1}.
+
+@item fr_in
+Set front right input volume. By default, this is @var{1}.
+
+@item fr_out
+Set front right output volume. By default, this is @var{1}.
+
+@item sl_in
+Set side left input volume. By default, this is @var{1}.
+
+@item sl_out
+Set side left output volume. By default, this is @var{1}.
+
+@item sr_in
+Set side right input volume. By default, this is @var{1}.
+
+@item sr_out
+Set side right output volume. By default, this is @var{1}.
+
+@item bl_in
+Set back left input volume. By default, this is @var{1}.
+
+@item bl_out
+Set back left output volume. By default, this is @var{1}.
+
+@item br_in
+Set back right input volume. By default, this is @var{1}.
+
+@item br_out
+Set back right output volume. By default, this is @var{1}.
+
+@item bc_in
+Set back center input volume. By default, this is @var{1}.
+
+@item bc_out
+Set back center output volume. By default, this is @var{1}.
+
 @item lfe_in
 Set LFE input volume. By default, this is @var{1}.
 
 @item lfe_out
 Set LFE output volume. By default, this is @var{1}.
+
+@item allx
+Set spread usage of stereo image across X axis for all channels.
+
+@item ally
+Set spread usage of stereo image across Y axis for all channels.
+
+@item fcx, flx, frx, blx, brx, slx, srx, bcx
+Set spread usage of stereo image across X axis for each channel.
+
+@item fcy, fly, fry, bly, bry, sly, sry, bcy
+Set spread usage of stereo image across Y axis for each channel.
+
+@item win_size
+Set window size. Allowed range is from @var{1024} to @var{65536}. Default size is @var{4096}.
+
+@item win_func
+Set window function.
+
+It accepts the following values:
+@table @samp
+@item rect
+@item bartlett
+@item hann, hanning
+@item hamming
+@item blackman
+@item welch
+@item flattop
+@item bharris
+@item bnuttall
+@item bhann
+@item sine
+@item nuttall
+@item lanczos
+@item gauss
+@item tukey
+@item dolph
+@item cauchy
+@item parzen
+@item poisson
+@item bohman
+@end table
+Default is @code{hann}.
+
+@item overlap
+Set window overlap. If set to 1, the recommended overlap for selected
+window function will be picked. Default is @code{0.5}.
 @end table
 
 @section treble, highshelf
@@ -5650,6 +5832,11 @@ Set factor to amplify difference. Default is 2. Allowed range is from 0 to 65535
 @item threshold
 Set threshold for difference amplification. Any difference greater or equal to
 this value will not alter source pixel. Default is 10.
+Allowed range is from 0 to 65535.
+
+@item tolerance
+Set tolerance for difference amplification. Any difference lower to
+this value will not alter source pixel. Default is 0.
 Allowed range is from 0 to 65535.
 
 @item low
@@ -11269,6 +11456,21 @@ kerndeint=map=1
 @end example
 @end itemize
 
+@section lagfun
+
+Slowly update darker pixels.
+
+This filter makes short flashes of light appear longer.
+This filter accepts the following options:
+
+@table @option
+@item decay
+Set factor for decaying. Default is .95. Allowed range is from 0 to 1.
+
+@item planes
+Set which planes to filter. Default is all. Allowed range is from 0 to 15.
+@end table
+
 @section lenscorrection
 
 Correct radial lens distortion
@@ -11383,6 +11585,15 @@ The focus distance of the image/video (expected constant for video). Note that
 focus distance is only used for vignetting and only slightly affects the
 vignetting correction process. If unknown, leave it at the default value (which
 is 1000).
+
+@item scale
+The scale factor which is applied after transformation. After correction the
+video is no longer necessarily rectangular. This parameter controls how much of
+the resulting image is visible. The value 0 means that a value will be chosen
+automatically such that there is little or no unmapped area in the output
+image. 1.0 means that no additional scaling is done. Lower values may result
+in more of the corrected image being visible, while higher values may avoid
+unmapped areas in the output.
 
 @item target_geometry
 The target geometry of the output image/video. The following values are valid
@@ -11575,6 +11786,8 @@ Currently supported formats:
 @table @samp
 @item cube
 Iridas
+@item csp
+cineSpace
 @end table
 
 @item interp
@@ -11617,6 +11830,8 @@ Iridas
 DaVinci
 @item m3d
 Pandora
+@item csp
+cineSpace
 @end table
 @item interp
 Select interpolation mode.
@@ -18326,7 +18541,7 @@ This filter accepts the following options:
 
 @table @option
 @item zoom, z
-Set the zoom expression. Default is 1.
+Set the zoom expression. Range is 1-10. Default is 1.
 
 @item x
 @item y
@@ -18985,6 +19200,39 @@ Flags to local 3x3 coordinates region centered on @code{x}:
 Apply erosion filter with threshold0 set to 30, threshold1 set 40, threshold2 set to 50 and coordinates set to 231, setting each pixel of the output to the local minimum between pixels: 1, 2, 3, 6, 7, 8 of the 3x3 region centered on it in the input. If the difference between input pixel and local minimum is more then threshold of the corresponding plane, output pixel will be set to input pixel - threshold of corresponding plane.
 @example
 -i INPUT -vf "hwupload, erosion_opencl=30:40:50:coordinates=231, hwdownload" OUTPUT
+@end example
+@end itemize
+
+@section colorkey_opencl
+RGB colorspace color keying.
+
+The filter accepts the following options:
+
+@table @option
+@item color
+The color which will be replaced with transparency.
+
+@item similarity
+Similarity percentage with the key color.
+
+0.01 matches only the exact key color, while 1.0 matches everything.
+
+@item blend
+Blend percentage.
+
+0.0 makes pixels either fully transparent, or not transparent at all.
+
+Higher values result in semi-transparent pixels, with a higher transparency
+the more similar the pixels color is to the key color.
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Make every semi-green pixel in the input transparent with some slight blending:
+@example
+-i INPUT -vf "hwupload, colorkey_opencl=green:0.3:0.1, hwdownload" OUTPUT
 @end example
 @end itemize
 
@@ -20545,10 +20793,15 @@ ebur128=metadata=1,adrawgraph=lavfi.r128.M:min=-120:max=5
 @anchor{ebur128}
 @section ebur128
 
-EBU R128 scanner filter. This filter takes an audio stream as input and outputs
-it unchanged. By default, it logs a message at a frequency of 10Hz with the
+EBU R128 scanner filter. This filter takes an audio stream and analyzes its loudness
+level. By default, it logs a message at a frequency of 10Hz with the
 Momentary loudness (identified by @code{M}), Short-term loudness (@code{S}),
 Integrated loudness (@code{I}) and Loudness Range (@code{LRA}).
+
+The filter can only analyze streams which have a sampling rate of 48000 Hz and whose
+sample format is double-precision floating point. The input stream will be converted to
+this specification, if needed. Users may need to insert aformat and/or aresample filters
+after this filter to obtain the original parameters.
 
 The filter also has a video output (see the @var{video} option) with a real
 time graph to observe the loudness evolution. The graphic contains the logged
@@ -21973,6 +22226,19 @@ logarithmic
 
 Default value is @samp{sqrt}.
 
+@item fscale
+Specify frequency scale.
+
+It accepts the following values:
+@table @samp
+@item lin
+linear
+@item log
+logarithmic
+@end table
+
+Default value is @samp{lin}.
+
 @item saturation
 Set saturation modifier for displayed colors. Negative values provide
 alternative color scheme. @code{0} is no saturation at all.
@@ -22144,6 +22410,19 @@ logarithmic
 5th root
 @end table
 Default value is @samp{log}.
+
+@item fscale
+Specify frequency scale.
+
+It accepts the following values:
+@table @samp
+@item lin
+linear
+@item log
+logarithmic
+@end table
+
+Default value is @samp{lin}.
 
 @item saturation
 Set saturation modifier for displayed colors. Negative values provide
@@ -22425,6 +22704,20 @@ Cubic root.
 @end table
 
 Default is linear.
+
+@item draw
+Set the draw mode.
+
+Available values are:
+@table @samp
+@item scale
+Scale pixel values for each drawn sample.
+
+@item full
+Draw every sample directly.
+@end table
+
+Default value is @code{scale}.
 @end table
 
 @subsection Examples

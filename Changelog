@@ -18,6 +18,14 @@ version <next>:
 - hcom demuxer and decoder
 - ARBC decoder
 - libaribb24 based ARIB STD-B24 caption support (profiles A and C)
+- Support decoding of HEVC 4:4:4 content in nvdec and cuviddec
+- removed libndi-newtek
+- agm decoder
+- KUX demuxer
+- AV1 frame split bitstream filter
+- lscr decoder
+- lagfun filter
+- asoftclip filter
 
 
 version 4.1:

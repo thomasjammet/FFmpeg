@@ -110,8 +110,8 @@ typedef struct VariantStream {
     unsigned var_stream_idx;
     unsigned number;
     int64_t sequence;
-    AVOutputFormat *oformat;
-    AVOutputFormat *vtt_oformat;
+    ff_const59 AVOutputFormat *oformat;
+    ff_const59 AVOutputFormat *vtt_oformat;
     AVIOContext *out;
     int packets_written;
     int init_range_length;
@@ -2241,6 +2241,7 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
 
         new_start_pos = avio_tell(vs->avf->pb);
         if (hls->segment_type != SEGMENT_TYPE_FMP4) {
+            avio_flush(oc->pb);
             vs->size = new_start_pos - vs->start_pos;
         } else {
             vs->size = new_start_pos;

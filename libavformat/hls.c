@@ -203,7 +203,6 @@ typedef struct HLSContext {
     int64_t cur_timestamp;
     AVIOInterruptCB *interrupt_callback;
     AVDictionary *avio_opts;
-    int strict_std_compliance;
     char *allowed_extensions;
     int max_reload;
     int http_persistent;
@@ -485,7 +484,7 @@ static struct rendition *new_rendition(HLSContext *c, struct rendition_info *inf
         return NULL;
 
     /* TODO: handle subtitles (each segment has to parsed separately) */
-    if (c->strict_std_compliance > FF_COMPLIANCE_EXPERIMENTAL)
+    if (c->ctx->strict_std_compliance > FF_COMPLIANCE_EXPERIMENTAL)
         if (type == AVMEDIA_TYPE_SUBTITLE)
             return NULL;
 
@@ -658,7 +657,7 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
         } else if (ret < 0) {
             if (ret != AVERROR_EOF)
                 av_log(s, AV_LOG_WARNING,
-                    "keepalive request failed for '%s', retrying with new connection: %s\n",
+                    "keepalive request failed for '%s' when opening url, retrying with new connection: %s\n",
                     url, av_err2str(ret));
             ret = s->io_open(s, pb, url, AVIO_FLAG_READ, &tmp);
         }
@@ -715,7 +714,7 @@ static int parse_playlist(HLSContext *c, const char *url,
         } else if (ret < 0) {
             if (ret != AVERROR_EOF)
                 av_log(c->ctx, AV_LOG_WARNING,
-                    "keepalive request failed for '%s', retrying with new connection: %s\n",
+                    "keepalive request failed for '%s' when parsing playlist, retrying with new connection: %s\n",
                     url, av_err2str(ret));
             in = NULL;
         }
@@ -1786,7 +1785,6 @@ static int hls_read_header(AVFormatContext *s)
 
     c->ctx                = s;
     c->interrupt_callback = &s->interrupt_callback;
-    c->strict_std_compliance = s->strict_std_compliance;
 
     c->first_packet = 1;
     c->first_timestamp = AV_NOPTS_VALUE;
@@ -1868,7 +1866,7 @@ static int hls_read_header(AVFormatContext *s)
     /* Open the demuxer for each playlist */
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
-        AVInputFormat *in_fmt = NULL;
+        ff_const59 AVInputFormat *in_fmt = NULL;
 
         if (!(pls->ctx = avformat_alloc_context())) {
             ret = AVERROR(ENOMEM);
@@ -2285,7 +2283,7 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
     return 0;
 }
 
-static int hls_probe(AVProbeData *p)
+static int hls_probe(const AVProbeData *p)
 {
     /* Require #EXTM3U at the start, and either one of the ones below
      * somewhere for a proper match. */
@@ -2318,14 +2316,14 @@ static const AVOption hls_options[] = {
 };
 
 static const AVClass hls_class = {
-    .class_name = "hls,applehttp",
+    .class_name = "hls demuxer",
     .item_name  = av_default_item_name,
     .option     = hls_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
 AVInputFormat ff_hls_demuxer = {
-    .name           = "hls,applehttp",
+    .name           = "hls",
     .long_name      = NULL_IF_CONFIG_SMALL("Apple HTTP Live Streaming"),
     .priv_class     = &hls_class,
     .priv_data_size = sizeof(HLSContext),

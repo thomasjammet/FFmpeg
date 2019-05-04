@@ -389,7 +389,7 @@ static mfxStatus frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req,
         !(req->Type & (MFX_MEMTYPE_FROM_VPPIN | MFX_MEMTYPE_FROM_VPPOUT)) ||
         !(req->Type & MFX_MEMTYPE_EXTERNAL_FRAME))
         return MFX_ERR_UNSUPPORTED;
-    if (i->Width  != i1->Width || i->Height != i1->Height ||
+    if (i->Width  > i1->Width || i->Height > i1->Height ||
         i->FourCC != i1->FourCC || i->ChromaFormat != i1->ChromaFormat) {
         av_log(ctx, AV_LOG_ERROR, "Mismatching surface properties in an "
                "allocation request: %dx%d %d %d vs %dx%d %d %d\n",
@@ -863,7 +863,8 @@ static int qsv_transfer_data_to(AVHWFramesContext *ctx, AVFrame *dst,
     mfxStatus err;
     int ret = 0;
     /* make a copy if the input is not padded as libmfx requires */
-    AVFrame tmp_frame, *src_frame;
+    AVFrame tmp_frame;
+    const AVFrame *src_frame;
     int realigned = 0;
 
 
@@ -891,8 +892,7 @@ static int qsv_transfer_data_to(AVHWFramesContext *ctx, AVFrame *dst,
     if (ret < 0)
         return ret;
 
-
-    if (src->height & 16 || src->linesize[0] & 16) {
+    if (src->height & 15 || src->linesize[0] & 15) {
         realigned = 1;
         memset(&tmp_frame, 0, sizeof(tmp_frame));
         tmp_frame.format         = src->format;

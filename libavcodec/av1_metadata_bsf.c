@@ -46,6 +46,8 @@ typedef struct AV1MetadataContext {
 
     AVRational tick_rate;
     int num_ticks_per_picture;
+
+    int delete_padding;
 } AV1MetadataContext;
 
 
@@ -158,6 +160,19 @@ static int av1_metadata_filter(AVBSFContext *bsf, AVPacket *out)
         }
     }
 
+    if (ctx->delete_padding) {
+        for (i = 0; i < frag->nb_units; i++) {
+            if (frag->units[i].type == AV1_OBU_PADDING) {
+                err = ff_cbs_delete_unit(ctx->cbc, frag, i);
+                if (err < 0) {
+                    av_log(bsf, AV_LOG_ERROR, "Failed to delete Padding OBU.\n");
+                    goto fail;
+                }
+                --i;
+            }
+        }
+    }
+
     err = ff_cbs_write_packet(ctx->cbc, out, frag);
     if (err < 0) {
         av_log(bsf, AV_LOG_ERROR, "Failed to write packet.\n");
@@ -170,7 +185,7 @@ static int av1_metadata_filter(AVBSFContext *bsf, AVPacket *out)
 
     err = 0;
 fail:
-    ff_cbs_fragment_uninit(ctx->cbc, frag);
+    ff_cbs_fragment_reset(ctx->cbc, frag);
 
     if (err < 0)
         av_packet_unref(out);
@@ -215,13 +230,15 @@ static int av1_metadata_init(AVBSFContext *bsf)
 
     err = 0;
 fail:
-    ff_cbs_fragment_uninit(ctx->cbc, frag);
+    ff_cbs_fragment_reset(ctx->cbc, frag);
     return err;
 }
 
 static void av1_metadata_close(AVBSFContext *bsf)
 {
     AV1MetadataContext *ctx = bsf->priv_data;
+
+    ff_cbs_fragment_free(ctx->cbc, &ctx->access_unit);
     ff_cbs_close(&ctx->cbc);
 }
 
@@ -272,6 +289,10 @@ static const AVOption av1_metadata_options[] = {
     { "num_ticks_per_picture", "Set display ticks per picture for CFR streams",
         OFFSET(num_ticks_per_picture), AV_OPT_TYPE_INT,
         { .i64 = -1 }, -1, INT_MAX, FLAGS },
+
+    { "delete_padding", "Delete all Padding OBUs",
+        OFFSET(delete_padding), AV_OPT_TYPE_BOOL,
+        { .i64 = 0 }, 0, 1, FLAGS},
 
     { NULL }
 };
