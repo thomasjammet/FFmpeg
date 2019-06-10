@@ -1,6 +1,6 @@
 /*
  * RTMFP network protocol
- * Copyright (c) 2015 Thomas Jammet
+ * Copyright (c) 2019 Thomas Jammet
  *
  * This file is part of FFmpeg.
  *
@@ -35,77 +35,63 @@
 #include <librtmfp/librtmfp.h>
 
 typedef struct LibRTMFPContext {
-    const AVClass*      class;
-    RTMFPConfig         rtmfp;
-    unsigned int        id;
-    int                 audioUnbuffered;
-    int                 videoUnbuffered;
-    int                 p2pPublishing;
-    char*               peerId;
-    char*               publication;
-    unsigned short      streamId;
-    const char*         swfUrl;
-    const char*         app;
-    const char*         pageUrl;
-    const char*         flashVer;
-    const char*         host;
-    const char*         hostIPv6;
+    const AVClass *class;
+    RTMFPConfig rtmfp;
+    unsigned int id;
+    int audiounbuffered;
+    int videounbuffered;
+    int p2ppublishing;
+    char *peerid;
+    char *publication;
+    unsigned short streamid;
+    const char *swfurl;
+    const char *app;
+    const char *pageurl;
+    const char *flashver;
+    const char *host;
+    const char *hostipv6;
 
     // General options
-    int                 socketReceiveSize;
-    int                 socketSendSize;
+    int socketreceivesize;
+    int socketsendsize;
 
     // NetGroup members
-    RTMFPGroupConfig    group;
-    char*               netgroup;
-    unsigned int        updatePeriod;
-    unsigned int        windowDuration;
-    unsigned int        pushLimit;
-    char*               fallbackUrl;
-    unsigned int        fallbackTimeout;
-    int                 disableRateCtl;
+    RTMFPGroupConfig group;
+    char *netgroup;
+    unsigned int updateperiod;
+    unsigned int windowduration;
+    unsigned int pushlimit;
+    char *fallbackurl;
+    unsigned int fallbacktimeout;
+    int disableratectl;
 } LibRTMFPContext;
 
 static void rtmfp_log(unsigned int level, const char* fileName, long line, const char* message)
 {
-    const char* strLevel = "";
-    time_t today2 ;
-    struct tm *today = NULL;
-    struct timeval tv;
+    const char* strlevel = "";
 
     switch (level) {
     default:
-    case 1: level = AV_LOG_FATAL; strLevel = "FATAL"; break;
+    case 1: level = AV_LOG_FATAL; strlevel = "FATAL"; break;
     case 2:
-    case 3: level = AV_LOG_ERROR; strLevel = "ERROR"; break;
-    case 4: level = AV_LOG_WARNING; strLevel = "WARN"; break;
+    case 3: level = AV_LOG_ERROR; strlevel = "ERROR"; break;
+    case 4: level = AV_LOG_WARNING; strlevel = "WARN"; break;
     case 5:
-    case 6: level = AV_LOG_INFO; strLevel = "INFO"; break;
-    case 7: level = AV_LOG_DEBUG; strLevel = "DEBUG"; break;
-    case 8: level = AV_LOG_TRACE; strLevel = "TRACE"; break;
+    case 6: level = AV_LOG_INFO; strlevel = "INFO"; break;
+    case 7: level = AV_LOG_DEBUG; strlevel = "DEBUG"; break;
+    case 8: level = AV_LOG_TRACE; strlevel = "TRACE"; break;
     }
 
-    today2 = time(NULL);
-    today = localtime(&today2);
-    gettimeofday(&tv, NULL);
-    av_log(NULL, level, "%.2d:%.2d:%.2d.%d [%s] %s\n", today->tm_hour, today->tm_min, today->tm_sec, (int)((tv.tv_usec / 1000) / 100), strLevel, message);
+    av_log(NULL, level, "[%s] %s\n", strlevel, message);
 }
-
-/*static void rtmfp_dump(const char* header, const void* data, unsigned int size) {
-    av_log(NULL, AV_LOG_DEBUG, "%s\n%.*s", header, size, (const char*)data);
-}*/
 
 static int rtmfp_close(URLContext *s)
 {
     LibRTMFPContext *ctx = s->priv_data;
 
-    av_log(NULL, AV_LOG_INFO, "Closing RTMFP connection...\n");
-    RTMFP_Terminate();
+    av_log(s, AV_LOG_INFO, "Closing RTMFP connection...\n");
+    RTMFP_Close(ctx->id, 0);
     return 0;
-}
-
-static void onStatusEvent(const char* code, const char* description) {
-  av_log(NULL, AV_LOG_INFO, "onStatusEvent : %s - %s\n", code, description);
 }
 
 /**
@@ -123,7 +109,7 @@ static void onStatusEvent(const char* code, const char* description) {
 static int rtmfp_open(URLContext *s, const char *uri, int flags)
 {
     LibRTMFPContext *ctx = s->priv_data;
-    int level = 0;
+    int level;
 
     switch (av_log_get_level()) {
         case AV_LOG_FATAL:   level = 1; break;
@@ -136,24 +122,21 @@ static int rtmfp_open(URLContext *s, const char *uri, int flags)
         case AV_LOG_TRACE:   level = 8; break;
     }
 
-    RTMFP_SetIntParameter("socketReceiveSize", ctx->socketReceiveSize);
-    RTMFP_SetIntParameter("socketSendSize", ctx->socketSendSize);
-    RTMFP_SetIntParameter("timeoutFallback", ctx->fallbackTimeout);
+    RTMFP_SetIntParameter("socketReceiveSize", ctx->socketreceivesize);
+    RTMFP_SetIntParameter("socketSendSize", ctx->socketsendsize);
+    RTMFP_SetIntParameter("timeoutFallback", ctx->fallbacktimeout);
     RTMFP_SetIntParameter("logLevel", level);
 
     RTMFP_Init(&ctx->rtmfp, &ctx->group, 1);
-    ctx->rtmfp.pOnStatusEvent = onStatusEvent;
     ctx->rtmfp.isBlocking = 1;
-    ctx->rtmfp.swfUrl = ctx->swfUrl;
+    ctx->rtmfp.swfUrl = ctx->swfurl;
     ctx->rtmfp.app = ctx->app;
-    ctx->rtmfp.pageUrl = ctx->pageUrl;
-    ctx->rtmfp.flashVer = ctx->flashVer;
+    ctx->rtmfp.pageUrl = ctx->pageurl;
+    ctx->rtmfp.flashVer = ctx->flashver;
     ctx->rtmfp.host = ctx->host;
-    ctx->rtmfp.hostIPv6 = ctx->hostIPv6;
+    ctx->rtmfp.hostIPv6 = ctx->hostipv6;
 
     RTMFP_LogSetCallback(rtmfp_log);
-    /*RTMFP_ActiveDump();
-    RTMFP_DumpSetCallback(rtmfp_dump);*/
     RTMFP_InterruptSetCallback(s->interrupt_callback.callback, s->interrupt_callback.opaque);
 
     RTMFP_GetPublicationAndUrlFromUri(uri, &ctx->publication);
@@ -161,7 +144,7 @@ static int rtmfp_open(URLContext *s, const char *uri, int flags)
     if ((ctx->id = RTMFP_Connect(uri, &ctx->rtmfp)) == 0)
         return -1;
 
-    av_log(NULL, AV_LOG_INFO, "RTMFP Connect called : %d\n", ctx->id);
+    av_log(s, AV_LOG_INFO, "RTMFP Connect called : %d\n", ctx->id);
 
     // Wait for connection to happen
     if (RTMFP_WaitForEvent(ctx->id, RTMFP_CONNECTED) == 0)
@@ -169,23 +152,23 @@ static int rtmfp_open(URLContext *s, const char *uri, int flags)
 
     if (ctx->netgroup) {
         ctx->group.netGroup = ctx->netgroup;
-        ctx->group.availabilityUpdatePeriod = ctx->updatePeriod;
-        ctx->group.windowDuration = ctx->windowDuration;
-        ctx->group.pushLimit = ctx->pushLimit;
+        ctx->group.availabilityUpdatePeriod = ctx->updateperiod;
+        ctx->group.windowDuration = ctx->windowduration;
+        ctx->group.pushLimit = ctx->pushlimit;
         ctx->group.isPublisher = (flags & AVIO_FLAG_WRITE) > 1;
         ctx->group.isBlocking = 1;
-        ctx->group.disableRateControl = ctx->disableRateCtl>0;
-        ctx->streamId = RTMFP_Connect2Group(ctx->id, ctx->publication, &ctx->rtmfp, &ctx->group, !ctx->audioUnbuffered, !ctx->videoUnbuffered, ctx->fallbackUrl);
-    } else if (ctx->peerId)
-        ctx->streamId = RTMFP_Connect2Peer(ctx->id, ctx->peerId, ctx->publication, 1);
-    else if (ctx->p2pPublishing)
-        ctx->streamId = RTMFP_PublishP2P(ctx->id, ctx->publication, !ctx->audioUnbuffered, !ctx->videoUnbuffered, 1);
+        ctx->group.disableRateControl = ctx->disableratectl>0;
+        ctx->streamid = RTMFP_Connect2Group(ctx->id, ctx->publication, &ctx->rtmfp, &ctx->group, !ctx->audiounbuffered, !ctx->videounbuffered, ctx->fallbackurl);
+    } else if (ctx->peerid)
+        ctx->streamid = RTMFP_Connect2Peer(ctx->id, ctx->peerid, ctx->publication, 1);
+    else if (ctx->p2ppublishing)
+        ctx->streamid = RTMFP_PublishP2P(ctx->id, ctx->publication, !ctx->audiounbuffered, !ctx->videounbuffered, 1);
     else if (flags & AVIO_FLAG_WRITE)
-        ctx->streamId = RTMFP_Publish(ctx->id, ctx->publication, !ctx->audioUnbuffered, !ctx->videoUnbuffered, 1);
+        ctx->streamid = RTMFP_Publish(ctx->id, ctx->publication, !ctx->audiounbuffered, !ctx->videounbuffered, 1);
     else
-        ctx->streamId = RTMFP_Play(ctx->id, ctx->publication);
+        ctx->streamid = RTMFP_Play(ctx->id, ctx->publication);
 
-    if (!ctx->streamId)
+    if (!ctx->streamid)
         return -1;
 
     s->is_streamed = 1;
@@ -195,47 +178,46 @@ static int rtmfp_open(URLContext *s, const char *uri, int flags)
 static int rtmfp_write(URLContext *s, const uint8_t *buf, int size)
 {
     LibRTMFPContext *ctx = s->priv_data;
-    int res = 0;
+    int res;
 
     res = RTMFP_Write(ctx->id, buf, size);
-    return (res < 0)? AVERROR_UNKNOWN : res;
+    return (res < 0)? AVERROR(EIO) : res;
 }
 
 static int rtmfp_read(URLContext *s, uint8_t *buf, int size)
 {
     LibRTMFPContext *ctx = s->priv_data;
-    int res = 0;
+    int res;
 
-    res = RTMFP_Read(ctx->streamId, ctx->id, buf, size);
+    res = RTMFP_Read(ctx->streamid, ctx->id, buf, size);
 
-    return (res < 0)? AVERROR_UNKNOWN : res;
+    return (res < 0)? AVERROR(EIO) : res;
 }
 
 #define OFFSET(x) offsetof(LibRTMFPContext, x)
 #define DEC AV_OPT_FLAG_DECODING_PARAM
 #define ENC AV_OPT_FLAG_ENCODING_PARAM
 static const AVOption options[] = {
-    {"socketReceiveSize", "Socket receive buffer size", OFFSET(socketReceiveSize), AV_OPT_TYPE_INT, {.i64 = 212992}, 0, 0x0FFFFFFF, DEC|ENC},
-    {"socketSendSize", "Socket send buffer size", OFFSET(socketSendSize), AV_OPT_TYPE_INT, {.i64 = 212992}, 0, 0x0FFFFFFF, DEC|ENC},
-    {"audioUnbuffered", "Unbuffered audio mode (default to false)", OFFSET(audioUnbuffered), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
-    {"videoUnbuffered", "Unbuffered video mode (default to false)", OFFSET(videoUnbuffered), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
-    {"peerId", "Connect to a peer for playing", OFFSET(peerId), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
-    {"p2pPublishing", "Publish the stream in p2p mode (default to false)", OFFSET(p2pPublishing), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
-    {"netgroup", "Publish/Play the stream into a NetGroup (multicast)", OFFSET(netgroup), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
-    {"fallbackUrl", "Try to play a unicast stream url until the NetGroup connection is not ready (can produce undefined behavior if the stream codecs are different)",
-        OFFSET(fallbackUrl), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
-    {"fallbackTimeout", "Set the timeout in milliseconds to start fallback to unicast", OFFSET(fallbackTimeout), AV_OPT_TYPE_INT, {.i64 = 8000 }, 0, 120000, DEC|ENC},
-    {"disableRateControl", "For Netgroup disable the P2P connection rate control to avoid disconnection", OFFSET(disableRateCtl), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
-    {"pushLimit", "Specifies the maximum number (-1) of peers to which we will send push fragments", OFFSET(pushLimit), AV_OPT_TYPE_INT, {.i64 = 4 }, 0, 255, DEC|ENC},
-    {"updatePeriod", "Specifies the interval in milliseconds between messages sent to peers informating them that the local node has new p2p multicast media fragments available",
-        OFFSET(updatePeriod), AV_OPT_TYPE_INT, {.i64 = 100 }, 100, 10000, DEC|ENC},
-    {"windowDuration", "Specifies the duration in milliseconds of the p2p multicast reassembly window", OFFSET(windowDuration), AV_OPT_TYPE_INT, {.i64 = 8000 }, 1000, 60000, DEC|ENC},
-    {"rtmfp_swfurl", "URL of the SWF player. By default no value will be sent", OFFSET(swfUrl), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
+    {"socketreceivesize", "Socket receive buffer size", OFFSET(socketreceivesize), AV_OPT_TYPE_INT, {.i64 = 212992}, 0, 0x0FFFFFFF, DEC|ENC},
+    {"socketsendsize", "Socket send buffer size", OFFSET(socketsendsize), AV_OPT_TYPE_INT, {.i64 = 212992}, 0, 0x0FFFFFFF, DEC|ENC},
+    {"audiounbuffered", "Unbuffered audio mode", OFFSET(audiounbuffered), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
+    {"videounbuffered", "Unbuffered video mode", OFFSET(videounbuffered), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
+    {"peerid", "Connect to a peer for playing", OFFSET(peerid), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
+    {"p2ppublishing", "Publish the stream in p2p mode", OFFSET(p2ppublishing), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
+    {"netgroup", "NetGroup id to connect or create a p2p multicast group", OFFSET(netgroup), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
+    {"fallbackurl", "Try to play a unicast stream url until the NetGroup connection is not ready (can produce undefined behavior if the stream codecs are different)",
+        OFFSET(fallbackurl), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
+    {"fallbacktimeout", "Set the timeout in milliseconds to start fallback to unicast", OFFSET(fallbacktimeout), AV_OPT_TYPE_INT, {.i64 = 8000 }, 0, 120000, DEC|ENC},
+    {"disableratecontrol", "For Netgroup disable the P2P connection rate control to avoid disconnection", OFFSET(disableratectl), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, DEC|ENC},
+    {"pushlimit", "Specifies the maximum number (minus one) of peers to which the peer will send push fragments", OFFSET(pushlimit), AV_OPT_TYPE_INT, {.i64 = 4 }, 0, 255, DEC|ENC},
+    {"updateperiod", "Interval in milliseconds between media fragments availability messages", OFFSET(updateperiod), AV_OPT_TYPE_INT, {.i64 = 100 }, 100, 10000, DEC|ENC},
+    {"windowduration", "Duration in milliseconds of the p2p multicast reassembly window", OFFSET(windowduration), AV_OPT_TYPE_INT, {.i64 = 8000 }, 1000, 60000, DEC|ENC},
+    {"rtmfp_swfurl", "URL of the SWF player. By default no value will be sent", OFFSET(swfurl), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
     {"rtmfp_app", "Name of application to connect to on the RTMFP server (by default 'live')", OFFSET(app), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
-    {"rtmfp_pageurl", "URL of the web page in which the media was embedded. By default no value will be sent.", OFFSET(pageUrl), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC},
-    {"rtmfp_flashver", "Version of the Flash plugin used to run the SWF player. By default 'WIN 20,0,0,286'", OFFSET(flashVer), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
+    {"rtmfp_pageurl", "URL of the web page in which the media was embedded. By default no value will be sent.", OFFSET(pageurl), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC},
+    {"rtmfp_flashver", "Version of the Flash plugin used to run the SWF player. By default 'WIN 20,0,0,286'", OFFSET(flashver), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
     {"rtmfp_host", "IPv4 host address to bind to (use this if you ave multiple interfaces)", OFFSET(host), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
-    {"rtmfp_hostIPv6", "IPv6 host address to bind to (use this if you ave multiple interfaces)", OFFSET(hostIPv6), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
+    {"rtmfp_hostipv6", "IPv6 host address to bind to (use this if you ave multiple interfaces)", OFFSET(hostipv6), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC|ENC},
     { NULL },
 };
 
