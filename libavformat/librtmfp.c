@@ -135,10 +135,10 @@ static int rtmfp_open(URLContext *s, const char *uri, int flags)
     ctx->rtmfp.flashVer = ctx->flashver;
     ctx->rtmfp.host = ctx->host;
     ctx->rtmfp.hostIPv6 = ctx->hostipv6;
+    ctx->rtmfp.interruptCb = s->interrupt_callback.callback;
+    ctx->rtmfp.interruptArg = s->interrupt_callback.opaque;
 
     RTMFP_LogSetCallback(rtmfp_log);
-    RTMFP_InterruptSetCallback(s->interrupt_callback.callback, s->interrupt_callback.opaque);
-
     RTMFP_GetPublicationAndUrlFromUri(uri, &ctx->publication);
 
     if ((ctx->id = RTMFP_Connect(uri, &ctx->rtmfp)) == 0)
