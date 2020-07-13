@@ -127,7 +127,7 @@ static int rtmfp_open(URLContext *s, const char *uri, int flags)
     RTMFP_SetIntParameter("timeoutFallback", ctx->fallbacktimeout);
     RTMFP_SetIntParameter("logLevel", level);
 
-    RTMFP_Init(&ctx->rtmfp, &ctx->group, 1);
+    RTMFP_Init(&ctx->rtmfp, &ctx->group, rtmfp_log, NULL);
     ctx->rtmfp.isBlocking = 1;
     ctx->rtmfp.swfUrl = ctx->swfurl;
     ctx->rtmfp.app = ctx->app;
@@ -138,7 +138,6 @@ static int rtmfp_open(URLContext *s, const char *uri, int flags)
     ctx->rtmfp.interruptCb = s->interrupt_callback.callback;
     ctx->rtmfp.interruptArg = s->interrupt_callback.opaque;
 
-    RTMFP_LogSetCallback(rtmfp_log);
     RTMFP_GetPublicationAndUrlFromUri(uri, &ctx->publication);
 
     if ((ctx->id = RTMFP_Connect(uri, &ctx->rtmfp)) == 0)
