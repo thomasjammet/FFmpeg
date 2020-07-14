@@ -135,11 +135,10 @@ static int vaapi_encode_h264_add_nal(AVCodecContext *avctx,
                                      CodedBitstreamFragment *au,
                                      void *nal_unit)
 {
-    VAAPIEncodeH264Context *priv = avctx->priv_data;
     H264RawNALUnitHeader *header = nal_unit;
     int err;
 
-    err = ff_cbs_insert_unit_content(priv->cbc, au, -1,
+    err = ff_cbs_insert_unit_content(au, -1,
                                      header->nal_unit_type, nal_unit, NULL);
     if (err < 0) {
         av_log(avctx, AV_LOG_ERROR, "Failed to add NAL unit: "
@@ -174,7 +173,7 @@ static int vaapi_encode_h264_write_sequence_header(AVCodecContext *avctx,
 
     err = vaapi_encode_h264_write_access_unit(avctx, data, data_len, au);
 fail:
-    ff_cbs_fragment_reset(priv->cbc, au);
+    ff_cbs_fragment_reset(au);
     return err;
 }
 
@@ -200,7 +199,7 @@ static int vaapi_encode_h264_write_slice_header(AVCodecContext *avctx,
 
     err = vaapi_encode_h264_write_access_unit(avctx, data, data_len, au);
 fail:
-    ff_cbs_fragment_reset(priv->cbc, au);
+    ff_cbs_fragment_reset(au);
     return err;
 }
 
@@ -264,7 +263,7 @@ static int vaapi_encode_h264_write_extra_header(AVCodecContext *avctx,
         if (err < 0)
             goto fail;
 
-        ff_cbs_fragment_reset(priv->cbc, au);
+        ff_cbs_fragment_reset(au);
 
         *type = VAEncPackedHeaderRawData;
         return 0;
@@ -286,7 +285,7 @@ static int vaapi_encode_h264_write_extra_header(AVCodecContext *avctx,
     }
 
 fail:
-    ff_cbs_fragment_reset(priv->cbc, au);
+    ff_cbs_fragment_reset(au);
     return err;
 }
 
@@ -471,9 +470,9 @@ static int vaapi_encode_h264_init_sequence_params(AVCodecContext *avctx)
             (ctx->va_bit_rate >> hrd->bit_rate_scale + 6) - 1;
 
         hrd->cpb_size_scale =
-            av_clip_uintp2(av_log2(ctx->hrd_params.hrd.buffer_size) - 15 - 4, 4);
+            av_clip_uintp2(av_log2(ctx->hrd_params.buffer_size) - 15 - 4, 4);
         hrd->cpb_size_value_minus1[0] =
-            (ctx->hrd_params.hrd.buffer_size >> hrd->cpb_size_scale + 4) - 1;
+            (ctx->hrd_params.buffer_size >> hrd->cpb_size_scale + 4) - 1;
 
         // CBR mode as defined for the HRD cannot be achieved without filler
         // data, so this flag cannot be set even with VAAPI CBR modes.
@@ -488,8 +487,8 @@ static int vaapi_encode_h264_init_sequence_params(AVCodecContext *avctx)
 
         // This calculation can easily overflow 32 bits.
         bp->nal.initial_cpb_removal_delay[0] = 90000 *
-            (uint64_t)ctx->hrd_params.hrd.initial_buffer_fullness /
-            ctx->hrd_params.hrd.buffer_size;
+            (uint64_t)ctx->hrd_params.initial_buffer_fullness /
+            ctx->hrd_params.buffer_size;
         bp->nal.initial_cpb_removal_delay_offset[0] = 0;
     } else {
         sps->vui.nal_hrd_parameters_present_flag = 0;
@@ -1130,6 +1129,8 @@ static av_cold int vaapi_encode_h264_configure(AVCodecContext *avctx)
         }
     }
 
+    ctx->roi_quant_range = 51 + 6 * (ctx->profile->depth - 8);
+
     return 0;
 }
 
@@ -1240,7 +1241,7 @@ static av_cold int vaapi_encode_h264_close(AVCodecContext *avctx)
 {
     VAAPIEncodeH264Context *priv = avctx->priv_data;
 
-    ff_cbs_fragment_free(priv->cbc, &priv->current_access_unit);
+    ff_cbs_fragment_free(&priv->current_access_unit);
     ff_cbs_close(&priv->cbc);
     av_freep(&priv->sei_identifier_string);
 
@@ -1349,15 +1350,16 @@ AVCodec ff_h264_vaapi_encoder = {
     .id             = AV_CODEC_ID_H264,
     .priv_data_size = sizeof(VAAPIEncodeH264Context),
     .init           = &vaapi_encode_h264_init,
-    .send_frame     = &ff_vaapi_encode_send_frame,
     .receive_packet = &ff_vaapi_encode_receive_packet,
     .close          = &vaapi_encode_h264_close,
     .priv_class     = &vaapi_encode_h264_class,
     .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HARDWARE,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
     .defaults       = vaapi_encode_h264_defaults,
     .pix_fmts = (const enum AVPixelFormat[]) {
         AV_PIX_FMT_VAAPI,
         AV_PIX_FMT_NONE,
     },
+    .hw_configs     = ff_vaapi_encode_hw_configs,
     .wrapper_name   = "vaapi",
 };

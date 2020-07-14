@@ -38,7 +38,10 @@ typedef struct Libdav1dContext {
 
     Dav1dData data;
     int tile_threads;
+    int frame_threads;
     int apply_grain;
+    int operating_point;
+    int all_layers;
 } Libdav1dContext;
 
 static const enum AVPixelFormat pix_fmt[][3] = {
@@ -46,6 +49,10 @@ static const enum AVPixelFormat pix_fmt[][3] = {
     [DAV1D_PIXEL_LAYOUT_I420] = { AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV420P12 },
     [DAV1D_PIXEL_LAYOUT_I422] = { AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV422P12 },
     [DAV1D_PIXEL_LAYOUT_I444] = { AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUV444P10, AV_PIX_FMT_YUV444P12 },
+};
+
+static const enum AVPixelFormat pix_fmt_rgb[3] = {
+    AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12,
 };
 
 static void libdav1d_log_callback(void *opaque, const char *fmt, va_list vl)
@@ -114,6 +121,7 @@ static av_cold int libdav1d_init(AVCodecContext *c)
 {
     Libdav1dContext *dav1d = c->priv_data;
     Dav1dSettings s;
+    int threads = (c->thread_count ? c->thread_count : av_cpu_count()) * 3 / 2;
     int res;
 
     av_log(c, AV_LOG_INFO, "libdav1d %s\n", dav1d_version());
@@ -124,9 +132,22 @@ static av_cold int libdav1d_init(AVCodecContext *c)
     s.allocator.cookie = dav1d;
     s.allocator.alloc_picture_callback = libdav1d_picture_allocator;
     s.allocator.release_picture_callback = libdav1d_picture_release;
-    s.n_tile_threads = dav1d->tile_threads;
-    s.apply_grain = dav1d->apply_grain;
-    s.n_frame_threads = FFMIN(c->thread_count ? c->thread_count : av_cpu_count(), DAV1D_MAX_FRAME_THREADS);
+    s.frame_size_limit = c->max_pixels;
+    if (dav1d->apply_grain >= 0)
+        s.apply_grain = dav1d->apply_grain;
+
+    s.all_layers = dav1d->all_layers;
+    if (dav1d->operating_point >= 0)
+        s.operating_point = dav1d->operating_point;
+
+    s.n_tile_threads = dav1d->tile_threads
+                     ? dav1d->tile_threads
+                     : FFMIN(floor(sqrt(threads)), DAV1D_MAX_TILE_THREADS);
+    s.n_frame_threads = dav1d->frame_threads
+                      ? dav1d->frame_threads
+                      : FFMIN(ceil(threads / s.n_tile_threads), DAV1D_MAX_FRAME_THREADS);
+    av_log(c, AV_LOG_DEBUG, "Using %d frame threads, %d tile threads\n",
+           s.n_frame_threads, s.n_tile_threads);
 
     res = dav1d_open(&dav1d->c, &s);
     if (res < 0)
@@ -147,6 +168,11 @@ static void libdav1d_data_free(const uint8_t *data, void *opaque) {
     AVBufferRef *buf = opaque;
 
     av_buffer_unref(&buf);
+}
+
+static void libdav1d_user_data_free(const uint8_t *data, void *opaque) {
+    av_assert0(data == opaque);
+    av_free(opaque);
 }
 
 static int libdav1d_receive_frame(AVCodecContext *c, AVFrame *frame)
@@ -176,6 +202,23 @@ static int libdav1d_receive_frame(AVCodecContext *c, AVFrame *frame)
 
             pkt.buf = NULL;
             av_packet_unref(&pkt);
+
+            if (c->reordered_opaque != AV_NOPTS_VALUE) {
+                uint8_t *reordered_opaque = av_malloc(sizeof(c->reordered_opaque));
+                if (!reordered_opaque) {
+                    dav1d_data_unref(data);
+                    return AVERROR(ENOMEM);
+                }
+
+                memcpy(reordered_opaque, &c->reordered_opaque, sizeof(c->reordered_opaque));
+                res = dav1d_data_wrap_user_data(data, reordered_opaque,
+                                                libdav1d_user_data_free, reordered_opaque);
+                if (res < 0) {
+                    av_free(reordered_opaque);
+                    dav1d_data_unref(data);
+                    return res;
+                }
+            }
         }
     }
 
@@ -197,7 +240,7 @@ static int libdav1d_receive_frame(AVCodecContext *c, AVFrame *frame)
         return res;
     }
 
-    av_assert0(p->data[0] != NULL);
+    av_assert0(p->data[0] && p->allocator_data);
 
     // This requires the custom allocator above
     frame->buf[0] = av_buffer_ref(p->allocator_data);
@@ -214,7 +257,8 @@ static int libdav1d_receive_frame(AVCodecContext *c, AVFrame *frame)
     frame->linesize[2] = p->stride[1];
 
     c->profile = p->seq_hdr->profile;
-    frame->format = c->pix_fmt = pix_fmt[p->p.layout][p->seq_hdr->hbd];
+    c->level = ((p->seq_hdr->operating_points[0].major_level - 2) << 2)
+               | p->seq_hdr->operating_points[0].minor_level;
     frame->width = p->p.w;
     frame->height = p->p.h;
     if (c->width != p->p.w || c->height != p->p.h) {
@@ -222,6 +266,12 @@ static int libdav1d_receive_frame(AVCodecContext *c, AVFrame *frame)
         if (res < 0)
             goto fail;
     }
+
+    av_reduce(&frame->sample_aspect_ratio.num,
+              &frame->sample_aspect_ratio.den,
+              frame->height * (int64_t)p->frame_hdr->render_width,
+              frame->width  * (int64_t)p->frame_hdr->render_height,
+              INT_MAX);
 
     switch (p->seq_hdr->chr) {
     case DAV1D_CHR_VERTICAL:
@@ -235,6 +285,26 @@ static int libdav1d_receive_frame(AVCodecContext *c, AVFrame *frame)
     frame->color_primaries = c->color_primaries = (enum AVColorPrimaries) p->seq_hdr->pri;
     frame->color_trc = c->color_trc = (enum AVColorTransferCharacteristic) p->seq_hdr->trc;
     frame->color_range = c->color_range = p->seq_hdr->color_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+
+    if (p->p.layout == DAV1D_PIXEL_LAYOUT_I444 &&
+        p->seq_hdr->mtrx == DAV1D_MC_IDENTITY &&
+        p->seq_hdr->pri  == DAV1D_COLOR_PRI_BT709 &&
+        p->seq_hdr->trc  == DAV1D_TRC_SRGB)
+        frame->format = c->pix_fmt = pix_fmt_rgb[p->seq_hdr->hbd];
+    else
+        frame->format = c->pix_fmt = pix_fmt[p->p.layout][p->seq_hdr->hbd];
+
+    if (p->m.user_data.data)
+        memcpy(&frame->reordered_opaque, p->m.user_data.data, sizeof(frame->reordered_opaque));
+    else
+        frame->reordered_opaque = AV_NOPTS_VALUE;
+
+    if (p->seq_hdr->num_units_in_tick && p->seq_hdr->time_scale) {
+        av_reduce(&c->framerate.den, &c->framerate.num,
+                  p->seq_hdr->num_units_in_tick, p->seq_hdr->time_scale, INT_MAX);
+        if (p->seq_hdr->equal_picture_interval)
+            c->ticks_per_frame = p->seq_hdr->num_ticks_per_picture;
+    }
 
     // match timestamps and packet size
     frame->pts = frame->best_effort_timestamp = p->m.timestamp;
@@ -317,8 +387,11 @@ static av_cold int libdav1d_close(AVCodecContext *c)
 #define OFFSET(x) offsetof(Libdav1dContext, x)
 #define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption libdav1d_options[] = {
-    { "tilethreads", "Tile threads", OFFSET(tile_threads), AV_OPT_TYPE_INT, { .i64 = 1 }, 1, DAV1D_MAX_TILE_THREADS, VD },
-    { "filmgrain", "Apply Film Grain", OFFSET(apply_grain), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, VD },
+    { "tilethreads", "Tile threads", OFFSET(tile_threads), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, DAV1D_MAX_TILE_THREADS, VD },
+    { "framethreads", "Frame threads", OFFSET(frame_threads), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, DAV1D_MAX_FRAME_THREADS, VD },
+    { "filmgrain", "Apply Film Grain", OFFSET(apply_grain), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, VD },
+    { "oppoint",  "Select an operating point of the scalable bitstream", OFFSET(operating_point), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, 31, VD },
+    { "alllayers", "Output all spatial layers", OFFSET(all_layers), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VD },
     { NULL }
 };
 

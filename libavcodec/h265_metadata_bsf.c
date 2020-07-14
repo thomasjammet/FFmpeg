@@ -20,9 +20,11 @@
 #include "libavutil/opt.h"
 
 #include "bsf.h"
+#include "bsf_internal.h"
 #include "cbs.h"
 #include "cbs_h265.h"
 #include "hevc.h"
+#include "h265_profile_level.h"
 
 enum {
     PASS,
@@ -30,10 +32,16 @@ enum {
     REMOVE,
 };
 
+enum {
+    LEVEL_UNSET = -2,
+    LEVEL_AUTO  = -1,
+};
+
 typedef struct H265MetadataContext {
     const AVClass *class;
 
-    CodedBitstreamContext *cbc;
+    CodedBitstreamContext *input;
+    CodedBitstreamContext *output;
     CodedBitstreamFragment access_unit;
 
     H265RawAUD aud_nal;
@@ -58,8 +66,104 @@ typedef struct H265MetadataContext {
     int crop_right;
     int crop_top;
     int crop_bottom;
+
+    int level;
+    int level_guess;
+    int level_warned;
 } H265MetadataContext;
 
+
+static void h265_metadata_guess_level(AVBSFContext *bsf,
+                                      const CodedBitstreamFragment *au)
+{
+    H265MetadataContext *ctx = bsf->priv_data;
+    const H265LevelDescriptor *desc;
+    const H265RawProfileTierLevel *ptl = NULL;
+    const H265RawHRDParameters    *hrd = NULL;
+    int64_t bit_rate = 0;
+    int width = 0, height = 0;
+    int tile_cols = 0, tile_rows = 0;
+    int max_dec_pic_buffering = 0;
+    int i;
+
+    for (i = 0; i < au->nb_units; i++) {
+        const CodedBitstreamUnit *unit = &au->units[i];
+
+        if (unit->type == HEVC_NAL_VPS) {
+            const H265RawVPS *vps = unit->content;
+
+            ptl = &vps->profile_tier_level;
+            max_dec_pic_buffering = vps->vps_max_dec_pic_buffering_minus1[0] + 1;
+
+            if (vps->vps_num_hrd_parameters > 0)
+                hrd = &vps->hrd_parameters[0];
+
+        } else if (unit->type == HEVC_NAL_SPS) {
+            const H265RawSPS *sps = unit->content;
+
+            ptl = &sps->profile_tier_level;
+            max_dec_pic_buffering = sps->sps_max_dec_pic_buffering_minus1[0] + 1;
+
+            width  = sps->pic_width_in_luma_samples;
+            height = sps->pic_height_in_luma_samples;
+
+            if (sps->vui.vui_hrd_parameters_present_flag)
+                hrd = &sps->vui.hrd_parameters;
+
+        } else if (unit->type == HEVC_NAL_PPS) {
+            const H265RawPPS *pps = unit->content;
+
+            if (pps->tiles_enabled_flag) {
+                tile_cols = pps->num_tile_columns_minus1 + 1;
+                tile_rows = pps->num_tile_rows_minus1 + 1;
+            }
+        }
+    }
+
+    if (hrd) {
+        if (hrd->nal_hrd_parameters_present_flag) {
+            bit_rate = (hrd->nal_sub_layer_hrd_parameters[0].bit_rate_value_minus1[0] + 1) *
+                       (INT64_C(1) << hrd->bit_rate_scale + 6);
+        } else if (hrd->vcl_hrd_parameters_present_flag) {
+            bit_rate = (hrd->vcl_sub_layer_hrd_parameters[0].bit_rate_value_minus1[0] + 1) *
+                       (INT64_C(1) << hrd->bit_rate_scale + 6);
+            // Adjust for VCL vs. NAL limits.
+            bit_rate = bit_rate * 11 / 10;
+        }
+    }
+
+    desc = ff_h265_guess_level(ptl, bit_rate, width, height,
+                               0, tile_rows, tile_cols,
+                               max_dec_pic_buffering);
+    if (desc) {
+        av_log(bsf, AV_LOG_DEBUG, "Stream appears to conform to "
+               "level %s.\n", desc->name);
+        ctx->level_guess = desc->level_idc;
+    }
+}
+
+static void h265_metadata_update_level(AVBSFContext *bsf,
+                                       uint8_t *level_idc)
+{
+    H265MetadataContext *ctx = bsf->priv_data;
+
+    if (ctx->level != LEVEL_UNSET) {
+        if (ctx->level == LEVEL_AUTO) {
+            if (ctx->level_guess) {
+                *level_idc = ctx->level_guess;
+            } else {
+                if (!ctx->level_warned) {
+                    av_log(bsf, AV_LOG_WARNING, "Unable to determine level "
+                           "of stream: using level 8.5.\n");
+                    ctx->level_warned = 1;
+                }
+                *level_idc = 255;
+            }
+        } else {
+            *level_idc = ctx->level;
+        }
+    }
+}
 
 static int h265_metadata_update_vps(AVBSFContext *bsf,
                                     H265RawVPS *vps)
@@ -85,6 +189,8 @@ static int h265_metadata_update_vps(AVBSFContext *bsf,
             vps->vps_poc_proportional_to_timing_flag = 0;
         }
     }
+
+    h265_metadata_update_level(bsf, &vps->profile_tier_level.general_level_idc);
 
     return 0;
 }
@@ -227,21 +333,77 @@ static int h265_metadata_update_sps(AVBSFContext *bsf,
     if (need_vui)
         sps->vui_parameters_present_flag = 1;
 
+    h265_metadata_update_level(bsf, &sps->profile_tier_level.general_level_idc);
+
     return 0;
 }
 
-static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *out)
+static int h265_metadata_update_side_data(AVBSFContext *bsf, AVPacket *pkt)
 {
     H265MetadataContext *ctx = bsf->priv_data;
-    AVPacket *in = NULL;
+    CodedBitstreamFragment *au = &ctx->access_unit;
+    uint8_t *side_data;
+    int side_data_size;
+    int err, i;
+
+    side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA,
+                                        &side_data_size);
+    if (!side_data_size)
+        return 0;
+
+    err = ff_cbs_read(ctx->input, au, side_data, side_data_size);
+    if (err < 0) {
+        av_log(bsf, AV_LOG_ERROR, "Failed to read extradata from packet side data.\n");
+        return err;
+    }
+
+    if (ctx->level == LEVEL_AUTO && !ctx->level_guess)
+        h265_metadata_guess_level(bsf, au);
+
+    for (i = 0; i < au->nb_units; i++) {
+        if (au->units[i].type == HEVC_NAL_VPS) {
+            err = h265_metadata_update_vps(bsf, au->units[i].content);
+            if (err < 0)
+                return err;
+        }
+        if (au->units[i].type == HEVC_NAL_SPS) {
+            err = h265_metadata_update_sps(bsf, au->units[i].content);
+            if (err < 0)
+                return err;
+        }
+    }
+
+    err = ff_cbs_write_fragment_data(ctx->output, au);
+    if (err < 0) {
+        av_log(bsf, AV_LOG_ERROR, "Failed to write extradata into packet side data.\n");
+        return err;
+    }
+
+    side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA, au->data_size);
+    if (!side_data)
+        return AVERROR(ENOMEM);
+    memcpy(side_data, au->data, au->data_size);
+
+    ff_cbs_fragment_reset(au);
+
+    return 0;
+}
+
+static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *pkt)
+{
+    H265MetadataContext *ctx = bsf->priv_data;
     CodedBitstreamFragment *au = &ctx->access_unit;
     int err, i;
 
-    err = ff_bsf_get_packet(bsf, &in);
+    err = ff_bsf_get_packet_ref(bsf, pkt);
     if (err < 0)
         return err;
 
-    err = ff_cbs_read_packet(ctx->cbc, au, in);
+    err = h265_metadata_update_side_data(bsf, pkt);
+    if (err < 0)
+        goto fail;
+
+    err = ff_cbs_read_packet(ctx->input, au, pkt);
     if (err < 0) {
         av_log(bsf, AV_LOG_ERROR, "Failed to read packet.\n");
         goto fail;
@@ -256,7 +418,7 @@ static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *out)
     // If an AUD is present, it must be the first NAL unit.
     if (au->units[0].type == HEVC_NAL_AUD) {
         if (ctx->aud == REMOVE)
-            ff_cbs_delete_unit(ctx->cbc, au, 0);
+            ff_cbs_delete_unit(au, 0);
     } else {
         if (ctx->aud == INSERT) {
             H265RawAUD *aud = &ctx->aud_nal;
@@ -288,14 +450,16 @@ static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *out)
             };
             aud->pic_type = pic_type;
 
-            err = ff_cbs_insert_unit_content(ctx->cbc, au,
-                                             0, HEVC_NAL_AUD, aud, NULL);
-            if (err) {
+            err = ff_cbs_insert_unit_content(au, 0, HEVC_NAL_AUD, aud, NULL);
+            if (err < 0) {
                 av_log(bsf, AV_LOG_ERROR, "Failed to insert AUD.\n");
                 goto fail;
             }
         }
     }
+
+    if (ctx->level == LEVEL_AUTO && !ctx->level_guess)
+        h265_metadata_guess_level(bsf, au);
 
     for (i = 0; i < au->nb_units; i++) {
         if (au->units[i].type == HEVC_NAL_VPS) {
@@ -310,23 +474,18 @@ static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *out)
         }
     }
 
-    err = ff_cbs_write_packet(ctx->cbc, out, au);
+    err = ff_cbs_write_packet(ctx->output, pkt, au);
     if (err < 0) {
         av_log(bsf, AV_LOG_ERROR, "Failed to write packet.\n");
         goto fail;
     }
 
-    err = av_packet_copy_props(out, in);
-    if (err < 0)
-        goto fail;
-
     err = 0;
 fail:
-    ff_cbs_fragment_reset(ctx->cbc, au);
+    ff_cbs_fragment_reset(au);
 
     if (err < 0)
-        av_packet_unref(out);
-    av_packet_free(&in);
+        av_packet_unref(pkt);
 
     return err;
 }
@@ -337,16 +496,22 @@ static int h265_metadata_init(AVBSFContext *bsf)
     CodedBitstreamFragment *au = &ctx->access_unit;
     int err, i;
 
-    err = ff_cbs_init(&ctx->cbc, AV_CODEC_ID_HEVC, bsf);
+    err = ff_cbs_init(&ctx->input,  AV_CODEC_ID_HEVC, bsf);
+    if (err < 0)
+        return err;
+    err = ff_cbs_init(&ctx->output, AV_CODEC_ID_HEVC, bsf);
     if (err < 0)
         return err;
 
     if (bsf->par_in->extradata) {
-        err = ff_cbs_read_extradata(ctx->cbc, au, bsf->par_in);
+        err = ff_cbs_read_extradata(ctx->input, au, bsf->par_in);
         if (err < 0) {
             av_log(bsf, AV_LOG_ERROR, "Failed to read extradata.\n");
             goto fail;
         }
+
+        if (ctx->level == LEVEL_AUTO)
+            h265_metadata_guess_level(bsf, au);
 
         for (i = 0; i < au->nb_units; i++) {
             if (au->units[i].type == HEVC_NAL_VPS) {
@@ -361,7 +526,7 @@ static int h265_metadata_init(AVBSFContext *bsf)
             }
         }
 
-        err = ff_cbs_write_extradata(ctx->cbc, bsf->par_out, au);
+        err = ff_cbs_write_extradata(ctx->output, bsf->par_out, au);
         if (err < 0) {
             av_log(bsf, AV_LOG_ERROR, "Failed to write extradata.\n");
             goto fail;
@@ -370,7 +535,7 @@ static int h265_metadata_init(AVBSFContext *bsf)
 
     err = 0;
 fail:
-    ff_cbs_fragment_reset(ctx->cbc, au);
+    ff_cbs_fragment_reset(au);
     return err;
 }
 
@@ -378,8 +543,9 @@ static void h265_metadata_close(AVBSFContext *bsf)
 {
     H265MetadataContext *ctx = bsf->priv_data;
 
-    ff_cbs_fragment_free(ctx->cbc, &ctx->access_unit);
-    ff_cbs_close(&ctx->cbc);
+    ff_cbs_fragment_free(&ctx->access_unit);
+    ff_cbs_close(&ctx->input);
+    ff_cbs_close(&ctx->output);
 }
 
 #define OFFSET(x) offsetof(H265MetadataContext, x)
@@ -440,6 +606,30 @@ static const AVOption h265_metadata_options[] = {
     { "crop_bottom", "Set bottom border crop offset",
         OFFSET(crop_bottom), AV_OPT_TYPE_INT,
         { .i64 = -1 }, -1, HEVC_MAX_HEIGHT, FLAGS },
+
+    { "level", "Set level (tables A.6 and A.7)",
+        OFFSET(level), AV_OPT_TYPE_INT,
+        { .i64 = LEVEL_UNSET }, LEVEL_UNSET, 0xff, FLAGS, "level" },
+    { "auto", "Attempt to guess level from stream properties",
+        0, AV_OPT_TYPE_CONST,
+        { .i64 = LEVEL_AUTO }, .flags = FLAGS, .unit = "level" },
+#define LEVEL(name, value) name, NULL, 0, AV_OPT_TYPE_CONST, \
+        { .i64 = value },      .flags = FLAGS, .unit = "level"
+    { LEVEL("1",    30) },
+    { LEVEL("2",    60) },
+    { LEVEL("2.1",  63) },
+    { LEVEL("3",    90) },
+    { LEVEL("3.1",  93) },
+    { LEVEL("4",   120) },
+    { LEVEL("4.1", 123) },
+    { LEVEL("5",   150) },
+    { LEVEL("5.1", 153) },
+    { LEVEL("5.2", 156) },
+    { LEVEL("6",   180) },
+    { LEVEL("6.1", 183) },
+    { LEVEL("6.2", 186) },
+    { LEVEL("8.5", 255) },
+#undef LEVEL
 
     { NULL }
 };

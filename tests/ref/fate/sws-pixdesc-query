@@ -57,8 +57,12 @@ isNBPS:
   nv20le
   p010be
   p010le
+  x2rgb10be
+  x2rgb10le
   xyz12be
   xyz12le
+  y210be
+  y210le
   yuv420p10be
   yuv420p10le
   yuv420p12be
@@ -139,7 +143,9 @@ isBE:
   rgb555be
   rgb565be
   rgba64be
+  x2rgb10be
   xyz12be
+  y210be
   ya16be
   yuv420p10be
   yuv420p12be
@@ -178,6 +184,8 @@ isYUV:
   nv20be
   nv20le
   nv21
+  nv24
+  nv42
   p010be
   p010le
   p016be
@@ -186,6 +194,8 @@ isYUV:
   uyyvyy411
   xyz12be
   xyz12le
+  y210be
+  y210le
   ya16be
   ya16le
   ya8
@@ -268,6 +278,8 @@ isPlanarYUV:
   nv20be
   nv20le
   nv21
+  nv24
+  nv42
   p010be
   p010le
   p016be
@@ -343,6 +355,19 @@ isPlanarYUV:
   yuvj440p
   yuvj444p
 
+isSemiPlanarYUV:
+  nv12
+  nv16
+  nv20be
+  nv20le
+  nv21
+  nv24
+  nv42
+  p010be
+  p010le
+  p016be
+  p016le
+
 isRGB:
   0bgr
   0rgb
@@ -414,6 +439,8 @@ isRGB:
   rgb8
   rgba64be
   rgba64le
+  x2rgb10be
+  x2rgb10le
 
 Gray:
   gray
@@ -560,6 +587,8 @@ AnyRGB:
   rgb8
   rgba64be
   rgba64le
+  x2rgb10be
+  x2rgb10le
 
 ALPHA:
   ayuv64be
@@ -667,8 +696,12 @@ Packed:
   rgba64le
   uyvy422
   uyyvyy411
+  x2rgb10be
+  x2rgb10le
   xyz12be
   xyz12le
+  y210be
+  y210le
   ya16be
   ya16le
   ya8
@@ -703,6 +736,8 @@ Planar:
   nv20be
   nv20le
   nv21
+  nv24
+  nv42
   p010be
   p010le
   p016be
@@ -827,6 +862,8 @@ PackedRGB:
   rgb8
   rgba64be
   rgba64le
+  x2rgb10be
+  x2rgb10le
 
 PlanarRGB:
   gbrap

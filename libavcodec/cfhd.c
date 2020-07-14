@@ -41,15 +41,25 @@
 #define ALPHA_COMPAND_GAIN 9400
 
 enum CFHDParam {
+    SampleType       =   1,
+    SampleIndexTable =   2,
+    BitstreamMarker  =   4,
+    TransformType    =  10,
     ChannelCount     =  12,
     SubbandCount     =  14,
     ImageWidth       =  20,
     ImageHeight      =  21,
+    LowpassWidth     =  27,
+    LowpassHeight    =  28,
     LowpassPrecision =  35,
+    HighpassWidth    =  41,
+    HighpassHeight   =  42,
     SubbandNumber    =  48,
     Quantization     =  53,
+    BandHeader       =  55,
     ChannelNumber    =  62,
     SampleFlags      =  68,
+    EncodedFormat    =  84,
     BitsPerComponent = 101,
     ChannelWidth     = 104,
     ChannelHeight    = 105,
@@ -150,6 +160,49 @@ static inline void process_alpha(int16_t *alpha, int width)
     }
 }
 
+static inline void process_bayer(AVFrame *frame)
+{
+    const int linesize = frame->linesize[0];
+    uint16_t *r = (uint16_t *)frame->data[0];
+    uint16_t *g1 = (uint16_t *)(frame->data[0] + 2);
+    uint16_t *g2 = (uint16_t *)(frame->data[0] + frame->linesize[0]);
+    uint16_t *b = (uint16_t *)(frame->data[0] + frame->linesize[0] + 2);
+    const int mid = 2048;
+
+    for (int y = 0; y < frame->height >> 1; y++) {
+        for (int x = 0; x < frame->width; x += 2) {
+            int R, G1, G2, B;
+            int g, rg, bg, gd;
+
+            g  = r[x];
+            rg = g1[x];
+            bg = g2[x];
+            gd = b[x];
+            gd -= mid;
+
+            R  = (rg - mid) * 2 + g;
+            G1 = g + gd;
+            G2 = g - gd;
+            B  = (bg - mid) * 2 + g;
+
+            R  = av_clip_uintp2(R  * 16, 16);
+            G1 = av_clip_uintp2(G1 * 16, 16);
+            G2 = av_clip_uintp2(G2 * 16, 16);
+            B  = av_clip_uintp2(B  * 16, 16);
+
+            r[x]  = R;
+            g1[x] = G1;
+            g2[x] = G2;
+            b[x]  = B;
+        }
+
+        r  += linesize;
+        g1 += linesize;
+        g2 += linesize;
+        b  += linesize;
+    }
+}
+
 static inline void filter(int16_t *output, ptrdiff_t out_stride,
                           int16_t *low, ptrdiff_t low_stride,
                           int16_t *high, ptrdiff_t high_stride,
@@ -217,6 +270,12 @@ static void horiz_filter_clip(int16_t *output, int16_t *low, int16_t *high,
     filter(output, 1, low, 1, high, 1, width, clip);
 }
 
+static void horiz_filter_clip_bayer(int16_t *output, int16_t *low, int16_t *high,
+                                    int width, int clip)
+{
+    filter(output, 2, low, 1, high, 1, width, clip);
+}
+
 static void vert_filter(int16_t *output, ptrdiff_t out_stride,
                         int16_t *low, ptrdiff_t low_stride,
                         int16_t *high, ptrdiff_t high_stride, int len)
@@ -249,6 +308,11 @@ static int alloc_buffers(AVCodecContext *avctx)
     int chroma_x_shift, chroma_y_shift;
     unsigned k;
 
+    if (s->coded_format == AV_PIX_FMT_BAYER_RGGB16) {
+        s->coded_width *= 2;
+        s->coded_height *= 2;
+    }
+
     if ((ret = ff_set_dimensions(avctx, s->coded_width, s->coded_height)) < 0)
         return ret;
     avctx->pix_fmt = s->coded_format;
@@ -258,6 +322,11 @@ static int alloc_buffers(AVCodecContext *avctx)
                                                 &chroma_y_shift)) < 0)
         return ret;
     planes = av_pix_fmt_count_planes(s->coded_format);
+    if (s->coded_format == AV_PIX_FMT_BAYER_RGGB16) {
+        planes = 4;
+        chroma_x_shift = 1;
+        chroma_y_shift = 1;
+    }
 
     for (i = 0; i < planes; i++) {
         int w8, h8, w4, h4, w2, h2;
@@ -420,7 +489,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             s->prescale_shift[1] = (data >> 3) & 0x7;
             s->prescale_shift[2] = (data >> 6) & 0x7;
             av_log(avctx, AV_LOG_DEBUG, "Prescale shift (VC-5): %x\n", data);
-        } else if (tag == 27) {
+        } else if (tag == LowpassWidth) {
             av_log(avctx, AV_LOG_DEBUG, "Lowpass width %"PRIu16"\n", data);
             if (data < 3 || data > s->plane[s->channel_num].band[0][0].a_width) {
                 av_log(avctx, AV_LOG_ERROR, "Invalid lowpass width\n");
@@ -429,7 +498,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             }
             s->plane[s->channel_num].band[0][0].width  = data;
             s->plane[s->channel_num].band[0][0].stride = data;
-        } else if (tag == 28) {
+        } else if (tag == LowpassHeight) {
             av_log(avctx, AV_LOG_DEBUG, "Lowpass height %"PRIu16"\n", data);
             if (data < 3 || data > s->plane[s->channel_num].band[0][0].a_height) {
                 av_log(avctx, AV_LOG_ERROR, "Invalid lowpass height\n");
@@ -437,9 +506,9 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
                 break;
             }
             s->plane[s->channel_num].band[0][0].height = data;
-        } else if (tag == 1)
+        } else if (tag == SampleType)
             av_log(avctx, AV_LOG_DEBUG, "Sample type? %"PRIu16"\n", data);
-        else if (tag == 10) {
+        else if (tag == TransformType) {
             if (data != 0) {
                 avpriv_report_missing_feature(avctx, "Transform type of %"PRIu16, data);
                 ret = AVERROR_PATCHWELCOME;
@@ -456,7 +525,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             avpriv_report_missing_feature(avctx, "Skip frame");
             ret = AVERROR_PATCHWELCOME;
             break;
-        } else if (tag == 2) {
+        } else if (tag == SampleIndexTable) {
             av_log(avctx, AV_LOG_DEBUG, "tag=2 header - skipping %i tag/value pairs\n", data);
             if (data > bytestream2_get_bytes_left(&gb) / 4) {
                 av_log(avctx, AV_LOG_ERROR, "too many tag/value pairs (%d)\n", data);
@@ -468,7 +537,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
                 uint16_t val2 = bytestream2_get_be16(&gb);
                 av_log(avctx, AV_LOG_DEBUG, "Tag/Value = %x %x\n", tag2, val2);
             }
-        } else if (tag == 41) {
+        } else if (tag == HighpassWidth) {
             av_log(avctx, AV_LOG_DEBUG, "Highpass width %i channel %i level %i subband %i\n", data, s->channel_num, s->level, s->subband_num);
             if (data < 3) {
                 av_log(avctx, AV_LOG_ERROR, "Invalid highpass width\n");
@@ -477,7 +546,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             }
             s->plane[s->channel_num].band[s->level][s->subband_num].width  = data;
             s->plane[s->channel_num].band[s->level][s->subband_num].stride = FFALIGN(data, 8);
-        } else if (tag == 42) {
+        } else if (tag == HighpassHeight) {
             av_log(avctx, AV_LOG_DEBUG, "Highpass height %i\n", data);
             if (data < 3) {
                 av_log(avctx, AV_LOG_ERROR, "Invalid highpass height\n");
@@ -517,20 +586,22 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
                 break;
             }
             s->bpc = data;
-        } else if (tag == 84) {
+        } else if (tag == EncodedFormat) {
             av_log(avctx, AV_LOG_DEBUG, "Sample format? %i\n", data);
-            if (data == 1)
+            if (data == 1) {
                 s->coded_format = AV_PIX_FMT_YUV422P10;
-            else if (data == 3)
+            } else if (data == 2) {
+                s->coded_format = AV_PIX_FMT_BAYER_RGGB16;
+            } else if (data == 3) {
                 s->coded_format = AV_PIX_FMT_GBRP12;
-            else if (data == 4)
+            } else if (data == 4) {
                 s->coded_format = AV_PIX_FMT_GBRAP12;
-            else {
+            } else {
                 avpriv_report_missing_feature(avctx, "Sample format of %"PRIu16, data);
                 ret = AVERROR_PATCHWELCOME;
                 break;
             }
-            planes = av_pix_fmt_count_planes(s->coded_format);
+            planes = data == 2 ? 4 : av_pix_fmt_count_planes(s->coded_format);
         } else if (tag == -85) {
             av_log(avctx, AV_LOG_DEBUG, "Cropped height %"PRIu16"\n", data);
             s->cropped_height = data;
@@ -551,7 +622,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             av_log(avctx, AV_LOG_DEBUG,  "Unknown tag %i data %x\n", tag, data);
 
         /* Some kind of end of header tag */
-        if (tag == 4 && data == 0x1a4a && s->coded_width && s->coded_height &&
+        if (tag == BitstreamMarker && data == 0x1a4a && s->coded_width && s->coded_height &&
             s->coded_format != AV_PIX_FMT_NONE) {
             if (s->a_width != s->coded_width || s->a_height != s->coded_height ||
                 s->a_format != s->coded_format) {
@@ -564,8 +635,12 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             ret = ff_set_dimensions(avctx, s->coded_width, s->coded_height);
             if (ret < 0)
                 return ret;
-            if (s->cropped_height)
-                avctx->height = s->cropped_height;
+            if (s->cropped_height) {
+                unsigned height = s->cropped_height << (avctx->pix_fmt == AV_PIX_FMT_BAYER_RGGB16);
+                if (avctx->height < height)
+                    return AVERROR_INVALIDDATA;
+                avctx->height = height;
+            }
             frame.f->width =
             frame.f->height = 0;
 
@@ -580,7 +655,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
         coeff_data = s->plane[s->channel_num].subband[s->subband_num_actual];
 
         /* Lowpass coefficients */
-        if (tag == 4 && data == 0xf0f && s->a_width && s->a_height) {
+        if (tag == BitstreamMarker && data == 0xf0f && s->a_width && s->a_height) {
             int lowpass_height = s->plane[s->channel_num].band[0][0].height;
             int lowpass_width  = s->plane[s->channel_num].band[0][0].width;
             int lowpass_a_height = s->plane[s->channel_num].band[0][0].a_height;
@@ -620,7 +695,7 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             av_log(avctx, AV_LOG_DEBUG, "Lowpass coefficients %d\n", lowpass_width * lowpass_height);
         }
 
-        if (tag == 55 && s->subband_num_actual != 255 && s->a_width && s->a_height) {
+        if (tag == BandHeader && s->subband_num_actual != 255 && s->a_width && s->a_height) {
             int highpass_height = s->plane[s->channel_num].band[s->level][s->subband_num].height;
             int highpass_width  = s->plane[s->channel_num].band[s->level][s->subband_num].width;
             int highpass_a_width = s->plane[s->channel_num].band[s->level][s->subband_num].a_width;
@@ -735,13 +810,27 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
     }
 
     planes = av_pix_fmt_count_planes(avctx->pix_fmt);
+    if (avctx->pix_fmt == AV_PIX_FMT_BAYER_RGGB16) {
+        if (!s->progressive)
+            return AVERROR_INVALIDDATA;
+        planes = 4;
+    }
+
     for (plane = 0; plane < planes && !ret; plane++) {
         /* level 1 */
         int lowpass_height  = s->plane[plane].band[0][0].height;
         int lowpass_width   = s->plane[plane].band[0][0].width;
         int highpass_stride = s->plane[plane].band[0][1].stride;
         int act_plane = plane == 1 ? 2 : plane == 2 ? 1 : plane;
+        ptrdiff_t dst_linesize;
         int16_t *low, *high, *output, *dst;
+
+        if (avctx->pix_fmt == AV_PIX_FMT_BAYER_RGGB16) {
+            act_plane = 0;
+            dst_linesize = pic->linesize[act_plane];
+        } else {
+            dst_linesize = pic->linesize[act_plane] / 2;
+        }
 
         if (lowpass_height > s->plane[plane].band[0][0].a_height || lowpass_width > s->plane[plane].band[0][0].a_width ||
             !highpass_stride || s->plane[plane].band[0][1].width > s->plane[plane].band[0][1].a_width) {
@@ -880,13 +969,33 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
             }
 
             dst = (int16_t *)pic->data[act_plane];
+            if (avctx->pix_fmt == AV_PIX_FMT_BAYER_RGGB16) {
+                if (plane & 1)
+                    dst++;
+                if (plane > 1)
+                    dst += pic->linesize[act_plane] >> 1;
+            }
             low  = s->plane[plane].l_h[6];
             high = s->plane[plane].l_h[7];
+
+            if (avctx->pix_fmt == AV_PIX_FMT_BAYER_RGGB16 &&
+                (lowpass_height * 2 > avctx->coded_height / 2 ||
+                 lowpass_width  * 2 > avctx->coded_width  / 2    )
+                ) {
+                ret = AVERROR_INVALIDDATA;
+                goto end;
+            }
+
             for (i = 0; i < lowpass_height * 2; i++) {
-                horiz_filter_clip(dst, low, high, lowpass_width, s->bpc);
+                if (avctx->pix_fmt == AV_PIX_FMT_BAYER_RGGB16)
+                    horiz_filter_clip_bayer(dst, low, high, lowpass_width, s->bpc);
+                else
+                    horiz_filter_clip(dst, low, high, lowpass_width, s->bpc);
+                if (avctx->pix_fmt == AV_PIX_FMT_GBRAP12 && act_plane == 3)
+                    process_alpha(dst, lowpass_width * 2);
                 low  += lowpass_width;
                 high += lowpass_width;
-                dst  += pic->linesize[act_plane] / 2;
+                dst  += dst_linesize;
             }
         } else {
             av_log(avctx, AV_LOG_DEBUG, "interlaced frame ? %d", pic->interlaced_frame);
@@ -924,6 +1033,8 @@ static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
     }
 
 
+    if (avctx->pix_fmt == AV_PIX_FMT_BAYER_RGGB16)
+        process_bayer(pic);
 end:
     if (ret < 0)
         return ret;
@@ -938,10 +1049,8 @@ static av_cold int cfhd_close(AVCodecContext *avctx)
 
     free_buffers(s);
 
-    if (!avctx->internal->is_copy) {
-        ff_free_vlc(&s->vlc_9);
-        ff_free_vlc(&s->vlc_18);
-    }
+    ff_free_vlc(&s->vlc_9);
+    ff_free_vlc(&s->vlc_18);
 
     return 0;
 }

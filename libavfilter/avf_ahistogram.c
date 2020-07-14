@@ -120,7 +120,7 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     AudioHistogramContext *s = ctx->priv;
 
-    s->nb_samples = FFMAX(1, ((double)inlink->sample_rate / av_q2d(s->frame_rate)) + 0.5);
+    s->nb_samples = FFMAX(1, av_rescale(inlink->sample_rate, s->frame_rate.den, s->frame_rate.num));
     s->dchannels = s->dmode == SINGLE ? 1 : inlink->channels;
     s->shistogram = av_calloc(s->w, s->dchannels * sizeof(*s->shistogram));
     if (!s->shistogram)
@@ -163,6 +163,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     const int w = s->w;
     int c, y, n, p, bin;
     uint64_t acmax = 1;
+    AVFrame *clone;
 
     if (!s->out || s->out->width  != outlink->w ||
                    s->out->height != outlink->h) {
@@ -363,7 +364,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
             s->ypos = H;
     }
 
-    return ff_filter_frame(outlink, av_frame_clone(s->out));
+    clone = av_frame_clone(s->out);
+    if (!clone)
+        return AVERROR(ENOMEM);
+
+    return ff_filter_frame(outlink, clone);
 }
 
 static int activate(AVFilterContext *ctx)

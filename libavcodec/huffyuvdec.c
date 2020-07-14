@@ -418,9 +418,6 @@ static av_cold int decode_init(AVCodecContext *avctx)
         case 0x0F0:
             avctx->pix_fmt = AV_PIX_FMT_GRAY16;
             break;
-        case 0x170:
-            avctx->pix_fmt = AV_PIX_FMT_GRAY8A;
-            break;
         case 0x470:
             avctx->pix_fmt = AV_PIX_FMT_GBRP;
             break;
@@ -572,35 +569,6 @@ static av_cold int decode_init(AVCodecContext *avctx)
     decode_end(avctx);
     return ret;
 }
-
-#if HAVE_THREADS
-static av_cold int decode_init_thread_copy(AVCodecContext *avctx)
-{
-    HYuvContext *s = avctx->priv_data;
-    int i, ret;
-
-    s->avctx = avctx;
-
-    if ((ret = ff_huffyuv_alloc_temp(s)) < 0) {
-        ff_huffyuv_common_end(s);
-        return ret;
-    }
-
-    for (i = 0; i < 8; i++)
-        s->vlc[i].table = NULL;
-
-    if (s->version >= 2) {
-        if ((ret = read_huffman_tables(s, avctx->extradata + 4,
-                                       avctx->extradata_size)) < 0)
-            return ret;
-    } else {
-        if ((ret = read_old_huffman_tables(s)) < 0)
-            return ret;
-    }
-
-    return 0;
-}
-#endif
 
 /** Subset of GET_VLC for use in hand-roller VLC code */
 #define VLC_INTERN(dst, table, gb, name, bits, max_depth)   \
@@ -960,12 +928,16 @@ static int decode_slice(AVCodecContext *avctx, AVFrame *p, int height,
                 left= left_prediction(s, p->data[plane], s->temp[0], w, 0);
 
                 y = 1;
+                if (y >= h)
+                    break;
 
                 /* second line is left predicted for interlaced case */
                 if (s->interlaced) {
                     decode_plane_bitstream(s, w, plane);
                     left = left_prediction(s, p->data[plane] + p->linesize[plane], s->temp[0], w, left);
                     y++;
+                    if (y >= h)
+                        break;
                 }
 
                 lefttop = p->data[plane][0];
@@ -1077,6 +1049,8 @@ static int decode_slice(AVCodecContext *avctx, AVFrame *p, int height,
                 }
 
                 cy = y = 1;
+                if (y >= height)
+                    break;
 
                 /* second line is left predicted for interlaced case */
                 if (s->interlaced) {
@@ -1089,6 +1063,8 @@ static int decode_slice(AVCodecContext *avctx, AVFrame *p, int height,
                     }
                     y++;
                     cy++;
+                    if (y >= height)
+                        break;
                 }
 
                 /* next 4 pixels are left predicted too */
@@ -1255,6 +1231,7 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
         slice_height = AV_RL32(avpkt->data + buf_size - 8);
         nb_slices = AV_RL32(avpkt->data + buf_size - 12);
         if (nb_slices * 8LL + slices_info_offset > buf_size - 16 ||
+            s->chroma_v_shift ||
             slice_height <= 0 || nb_slices * (uint64_t)slice_height > height)
             return AVERROR_INVALIDDATA;
     } else {
@@ -1304,7 +1281,6 @@ AVCodec ff_huffyuv_decoder = {
     .decode           = decode_frame,
     .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DRAW_HORIZ_BAND |
                         AV_CODEC_CAP_FRAME_THREADS,
-    .init_thread_copy = ONLY_IF_THREADS_ENABLED(decode_init_thread_copy),
 };
 
 #if CONFIG_FFVHUFF_DECODER
@@ -1319,7 +1295,6 @@ AVCodec ff_ffvhuff_decoder = {
     .decode           = decode_frame,
     .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DRAW_HORIZ_BAND |
                         AV_CODEC_CAP_FRAME_THREADS,
-    .init_thread_copy = ONLY_IF_THREADS_ENABLED(decode_init_thread_copy),
 };
 #endif /* CONFIG_FFVHUFF_DECODER */
 
@@ -1335,6 +1310,5 @@ AVCodec ff_hymt_decoder = {
     .decode           = decode_frame,
     .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DRAW_HORIZ_BAND |
                         AV_CODEC_CAP_FRAME_THREADS,
-    .init_thread_copy = ONLY_IF_THREADS_ENABLED(decode_init_thread_copy),
 };
 #endif /* CONFIG_HYMT_DECODER */

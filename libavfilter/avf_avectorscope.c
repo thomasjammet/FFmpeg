@@ -211,7 +211,7 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     AudioVectorScopeContext *s = ctx->priv;
 
-    s->nb_samples = FFMAX(1, ((double)inlink->sample_rate / av_q2d(s->frame_rate)) + 0.5);
+    s->nb_samples = FFMAX(1, av_rescale(inlink->sample_rate, s->frame_rate.den, s->frame_rate.num));
 
     return 0;
 }
@@ -238,6 +238,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
     AudioVectorScopeContext *s = ctx->priv;
     const int hw = s->hw;
     const int hh = s->hh;
+    AVFrame *clone;
     unsigned x, y;
     unsigned prev_x = s->prev_x, prev_y = s->prev_y;
     double zoom = s->zoom;
@@ -360,7 +361,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
     s->prev_x = x, s->prev_y = y;
     av_frame_free(&insamples);
 
-    return ff_filter_frame(outlink, av_frame_clone(s->outpicref));
+    clone = av_frame_clone(s->outpicref);
+    if (!clone)
+        return AVERROR(ENOMEM);
+
+    return ff_filter_frame(outlink, clone);
 }
 
 static int activate(AVFilterContext *ctx)

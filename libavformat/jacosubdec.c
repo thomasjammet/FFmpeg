@@ -107,6 +107,7 @@ static const char *read_ts(JACOsubContext *jacosub, const char *buf,
     unsigned hs, ms, ss, fs; // hours, minutes, seconds, frame start
     unsigned he, me, se, fe; // hours, minutes, seconds, frame end
     int ts_start, ts_end;
+    int64_t ts_start64, ts_end64;
 
     /* timed format */
     if (sscanf(buf, "%u:%u:%u.%u %u:%u:%u.%u %n",
@@ -124,10 +125,10 @@ static const char *read_ts(JACOsubContext *jacosub, const char *buf,
     return NULL;
 
 shift_and_ret:
-    ts_start  = (ts_start + jacosub->shift) * 100 / jacosub->timeres;
-    ts_end    = (ts_end   + jacosub->shift) * 100 / jacosub->timeres;
-    *start    = ts_start;
-    *duration = ts_end - ts_start;
+    ts_start64  = (ts_start + jacosub->shift) * 100LL / jacosub->timeres;
+    ts_end64    = (ts_end   + jacosub->shift) * 100LL / jacosub->timeres;
+    *start    = ts_start64;
+    *duration = ts_end64 - ts_start64;
     return buf + len;
 }
 
@@ -187,8 +188,10 @@ static int jacosub_read_header(AVFormatContext *s)
             AVPacket *sub;
 
             sub = ff_subtitles_queue_insert(&jacosub->q, line, len, merge_line);
-            if (!sub)
-                return AVERROR(ENOMEM);
+            if (!sub) {
+                ret = AVERROR(ENOMEM);
+                goto fail;
+            }
             sub->pos = pos;
             merge_line = len > 1 && !strcmp(&line[len - 2], "\\\n");
             continue;

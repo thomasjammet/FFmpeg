@@ -108,7 +108,10 @@ static av_cold int init(AVFilterContext *ctx)
             break;
 
         p = NULL;
-        av_sscanf(arg, "%f", &s->weights[i]);
+        if (av_sscanf(arg, "%f", &s->weights[i]) != 1) {
+            av_log(ctx, AV_LOG_ERROR, "Invalid syntax for weights[%d].\n", i);
+            return AVERROR(EINVAL);
+        }
         s->wfactor += s->weights[i];
         last = i;
     }
@@ -217,8 +220,8 @@ static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
     MixContext *s = ctx->priv;
-    AVRational time_base = ctx->inputs[0]->time_base;
     AVRational frame_rate = ctx->inputs[0]->frame_rate;
+    AVRational sar = ctx->inputs[0]->sample_aspect_ratio;
     AVFilterLink *inlink = ctx->inputs[0];
     int height = ctx->inputs[0]->h;
     int width = ctx->inputs[0]->w;
@@ -252,8 +255,8 @@ static int config_output(AVFilterLink *outlink)
 
     outlink->w          = width;
     outlink->h          = height;
-    outlink->time_base  = time_base;
     outlink->frame_rate = frame_rate;
+    outlink->sample_aspect_ratio = sar;
 
     if ((ret = ff_framesync_init(&s->fs, ctx, s->nb_inputs)) < 0)
         return ret;
@@ -271,7 +274,10 @@ static int config_output(AVFilterLink *outlink)
         in[i].after  = (s->duration == 1 || (s->duration == 2 && i == 0)) ? EXT_STOP : EXT_INFINITY;
     }
 
-    return ff_framesync_configure(&s->fs);
+    ret = ff_framesync_configure(&s->fs);
+    outlink->time_base = s->fs.time_base;
+
+    return ret;
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
@@ -286,7 +292,7 @@ static av_cold void uninit(AVFilterContext *ctx)
         for (i = 0; i < ctx->nb_inputs; i++)
             av_freep(&ctx->input_pads[i].name);
     } else {
-        for (i = 0; i < s->nb_frames; i++)
+        for (i = 0; i < s->nb_frames && s->frames; i++)
             av_frame_free(&s->frames[i]);
     }
     av_freep(&s->frames);
@@ -302,7 +308,7 @@ static int activate(AVFilterContext *ctx)
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_FILTERING_PARAM
 
 static const AVOption mix_options[] = {
-    { "inputs", "set number of inputs", OFFSET(nb_inputs), AV_OPT_TYPE_INT, {.i64=2}, 2, INT_MAX, .flags = FLAGS },
+    { "inputs", "set number of inputs", OFFSET(nb_inputs), AV_OPT_TYPE_INT, {.i64=2}, 2, INT16_MAX, .flags = FLAGS },
     { "weights", "set weight for each input", OFFSET(weights_str), AV_OPT_TYPE_STRING, {.str="1 1"}, 0, 0, .flags = FLAGS },
     { "scale", "set scale", OFFSET(scale), AV_OPT_TYPE_FLOAT, {.dbl=0}, 0, INT16_MAX, .flags = FLAGS },
     { "duration", "how to determine end of stream", OFFSET(duration), AV_OPT_TYPE_INT, {.i64=0}, 0, 2, .flags = FLAGS, "duration" },
